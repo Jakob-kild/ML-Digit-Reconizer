@@ -7,10 +7,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from tkinter import Tk, Label, Button, Frame
-from src.train_model import DigitRecognizer
+from src.train_model import CNNModel
 
 # Load the pre-trained model
-model = DigitRecognizer()
+model = CNNModel()
 model.load_state_dict(torch.load("./models/final_model.pth", weights_only=True))
 model.eval()  # Set the model to evaluation mode
 
@@ -28,14 +28,15 @@ def preprocess_image(image_path):
     return tensor_image, processed_image
 
 def preprocess_frame(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     transform = transforms.Compose([
         transforms.ToPILImage(),
-        transforms.Grayscale(),
         transforms.Resize((28, 28)),
         transforms.ToTensor(),
         transforms.Normalize((0.5,), (0.5,))
     ])
-    tensor_image = transform(frame).unsqueeze(0)  # Add batch dimension
+    tensor_image = transform(thresh).unsqueeze(0)
     return tensor_image
 
 # Function to update the bar chart
@@ -98,38 +99,40 @@ def start_camera_feed():
             cap.release()
             return
 
-        # Convert the captured frame to RGB
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        image_tensor = preprocess_frame(frame_rgb)
+        # Define a detection box
+        height, width, _ = frame.shape
+        bbox_size = (100, 100)
+        bbox = [
+            (width // 2 - bbox_size[0] // 2, height // 2 - bbox_size[1] // 2),
+            (width // 2 + bbox_size[0] // 2, height // 2 + bbox_size[1] // 2)
+        ]
+        cv2.rectangle(frame, bbox[0], bbox[1], (0, 255, 0), 2)
 
-        # Make prediction
-        with torch.no_grad():
-            output = model(image_tensor)
-            predicted_digit = output.argmax(dim=1).item()
+        # Extract region of interest (ROI) within the detection box
+        roi = frame[bbox[0][1]:bbox[1][1], bbox[0][0]:bbox[1][0]]
 
-        # Overlay the predicted digit on the frame
-        cv2.putText(
-            frame_rgb,
-            "Jakob",
-            (20, 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (0, 255, 0),
-            2,
-            cv2.LINE_AA
-        )
-        cv2.putText(
-            frame_rgb,
-            f"Predicted Digit: {predicted_digit}",
-            (20, 70),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (0, 255, 0),
-            2,
-            cv2.LINE_AA
-        )
+        if roi.shape[0] > 0 and roi.shape[1] > 0:
+            roi_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+            image_tensor = preprocess_frame(roi_rgb)
+
+            # Make prediction
+            with torch.no_grad():
+                output = model(image_tensor)
+                predicted_digit = output.argmax(dim=1).item()
+
+            # Overlay the predicted digit on the frame
+            cv2.putText(
+                frame,
+                f"Predicted Digit: {predicted_digit}",
+                (bbox[0][0], bbox[0][1] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                (0, 255, 0),
+                2
+            )
 
         # Convert the frame to a Tkinter-compatible image
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_pil = Image.fromarray(frame_rgb)
         frame_tk = ImageTk.PhotoImage(image=frame_pil)
         live_feed_label.config(image=frame_tk)
