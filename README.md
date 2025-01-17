@@ -15,8 +15,8 @@ The project uses PyTorch for the main model and TensorFlow for compatibility wit
 ## Installation
 1. Clone the repository:
    ```bash
-   git clone <repository_url>
-   cd <repository_name>
+   git clone https://github.com/Jakob-kild/ML-Digit-Reconizer.git
+   cd ML-Digit-Reconizer
    ```
 
 2. Install the required dependencies:
