@@ -11,10 +11,22 @@ from src.train_model import DigitRecognizer
 
 # Load the pre-trained model
 model = DigitRecognizer()
-model.load_state_dict(torch.load("./models/final_model.pth"))
+model.load_state_dict(torch.load("./models/final_model.pth", weights_only=True))
 model.eval()  # Set the model to evaluation mode
 
 # Define the transformation for preprocessing
+def preprocess_image(image_path):
+    transform = transforms.Compose([
+        transforms.Grayscale(),  # Convert to grayscale
+        transforms.Resize((28, 28)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,), (0.5,))
+    ])
+    image = Image.open(image_path)
+    tensor_image = transform(image).unsqueeze(0)  # Add batch dimension
+    processed_image = transform(image)  # Return the processed image for display
+    return tensor_image, processed_image
+
 def preprocess_frame(frame):
     transform = transforms.Compose([
         transforms.ToPILImage(),
@@ -26,32 +38,16 @@ def preprocess_frame(frame):
     tensor_image = transform(frame).unsqueeze(0)  # Add batch dimension
     return tensor_image
 
-def preprocess_image(image_path):
-    transform = transforms.Compose([
-        transforms.Grayscale(),  # Convert to grayscale
-        transforms.Resize((28, 28)),
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-    ])
-    image = Image.open(image_path)
-    tensor_image = transform(image).unsqueeze(0)  # Add batch dimension
-    return tensor_image
-
-# Function to visualize the prediction
-def view_classify(img, ps):
-    ''' Function to view an image and its predicted classes. '''
-    ps = ps.numpy().squeeze()
-    fig, (ax1, ax2) = plt.subplots(figsize=(6, 9), nrows=2)
-    ax1.imshow(img, cmap='gray')
-    ax1.axis('off')
-    ax2.barh(np.arange(10), ps, color="blue")
-    ax2.set_aspect(0.1)
-    ax2.set_yticks(np.arange(10))
-    ax2.set_yticklabels(np.arange(10))
-    ax2.set_title('Class Probability')
-    ax2.set_xlim(0, 1.1)
-    plt.tight_layout()
-    return fig
+# Function to update the bar chart
+def update_bar_chart(ax, canvas, probabilities):
+    ax.clear()
+    ax.barh(np.arange(10), probabilities, color="blue")
+    ax.set_aspect(0.2)
+    ax.set_yticks(np.arange(10))
+    ax.set_yticklabels(np.arange(10))
+    ax.set_title('Class Probability')
+    ax.set_xlim(0, 1.1)
+    canvas.draw()
 
 def upload_and_predict():
     file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.png;*.jpg;*.jpeg")])
@@ -59,56 +55,73 @@ def upload_and_predict():
         return
 
     # Preprocess the image
-    image_tensor = preprocess_image(file_path)
+    image_tensor, processed_image = preprocess_image(file_path)
 
     # Make prediction
     with torch.no_grad():
         output = model(image_tensor)
         predicted_digit = output.argmax(dim=1).item()
-        probabilities = torch.exp(output).squeeze()
+        probabilities = torch.nn.functional.softmax(output, dim=1).squeeze().numpy()
 
     # Display the predicted digit
     result_label.config(text=f"Predicted Digit: {predicted_digit}")
 
-    # Display the image and class probabilities using the new plot
-    #fig = view_classify(image_tensor, probabilities)
-    #canvas = FigureCanvasTkAgg(fig, master=frame)
-    #canvas_widget = canvas.get_tk_widget()
-    #canvas_widget.pack()
-    #canvas.draw()
+    # Display the preprocessed image scaled to 200x200 pixels
+    processed_image_np = processed_image.numpy().squeeze() * 255
+    processed_image_np = processed_image_np.astype(np.uint8)
+    processed_img = ImageTk.PhotoImage(image=Image.fromarray(processed_image_np).resize((200, 200)))
+    preprocessed_image_label.config(image=processed_img)
+    preprocessed_image_label.image = processed_img
 
+    # Update the probability bar chart
+    ax.set_aspect(1.0)  # Match the aspect ratio to the image
+    canvas.get_tk_widget().config(width=200, height=200)
+    update_bar_chart(ax, canvas, probabilities)
 
-# Function to handle live camera feed
 def start_camera_feed():
+    global running
+    running = True
     cap = cv2.VideoCapture(0)
 
     if not cap.isOpened():
         print("Error: Camera not accessible")
         return
 
-    while True:
+    def update_frame():
+        if not running:
+            cap.release()
+            return
+
         ret, frame = cap.read()
         if not ret:
             print("Error: Failed to capture frame")
-            break
+            cap.release()
+            return
 
         # Convert the captured frame to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-        # Preprocess the frame
         image_tensor = preprocess_frame(frame_rgb)
 
         # Make prediction
         with torch.no_grad():
             output = model(image_tensor)
             predicted_digit = output.argmax(dim=1).item()
-            probabilities = torch.exp(output).squeeze()
 
         # Overlay the predicted digit on the frame
         cv2.putText(
-            frame,
+            frame_rgb,
+            "Jakob",
+            (20, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 255, 0),
+            2,
+            cv2.LINE_AA
+        )
+        cv2.putText(
+            frame_rgb,
             f"Predicted Digit: {predicted_digit}",
-            (10, 30),
+            (20, 70),
             cv2.FONT_HERSHEY_SIMPLEX,
             1,
             (0, 255, 0),
@@ -116,33 +129,84 @@ def start_camera_feed():
             cv2.LINE_AA
         )
 
-        # Show the frame
-        cv2.imshow("Live Digit Recognition", frame)
+        # Convert the frame to a Tkinter-compatible image
+        frame_pil = Image.fromarray(frame_rgb)
+        frame_tk = ImageTk.PhotoImage(image=frame_pil)
+        live_feed_label.config(image=frame_tk)
+        live_feed_label.image = frame_tk
 
-        # Exit the loop on 'q' key press
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        # Schedule the next frame update
+        root.after(10, update_frame)
 
-    cap.release()
-    cv2.destroyAllWindows()
+    update_frame()
+
+def stop_camera_feed():
+    global running
+    running = False
+    live_feed_label.config(image="")
+    live_feed_label.image = None
 
 # GUI setup
 root = Tk()
-root.title("Live Digit Recognition")
+root.title("Digit Recognition")
+root.configure(bg="white")
 
-frame = Frame(root)
-frame.pack(pady=20)
+# Set window dimensions
+window_width = 1200
+window_height = 700
+screen_width = root.winfo_screenwidth()
+screen_height = root.winfo_screenheight()
+x_coordinate = (screen_width // 2) - (window_width // 2)
+y_coordinate = (screen_height // 2) - (window_height // 2)
+root.geometry(f"{window_width}x{window_height}+{x_coordinate}+{y_coordinate}")
 
-# Create and place widgets
-upload_btn = Button(frame, text="Upload Image", command=upload_and_predict)
-upload_btn.pack(pady=10)
-result_label = Label(root, text="Predicted Digit: ", font=("Helvetica", 16))
+main_frame = Frame(root, bg="white")
+main_frame.pack(fill="both", expand=True)
+
+# Left side for live feed
+left_frame = Frame(main_frame, bg="white", width=600, height=700)
+left_frame.pack(side="left", fill="both", padx=10, pady=10)
+left_frame.pack_propagate(False)
+
+Label(left_frame, text="Live Camera Feed", font=("Helvetica", 16), bg="white").pack(pady=10)
+Button(left_frame, text="Start Live Feed", command=start_camera_feed, font=("Helvetica", 14)).pack(pady=5)
+Button(left_frame, text="Stop Live Feed", command=stop_camera_feed, font=("Helvetica", 14)).pack(pady=5)
+
+live_feed_label = Label(left_frame, bg="white")
+live_feed_label.pack(pady=10, fill="both", expand=True)
+
+# Vertical separator
+separator = Frame(main_frame, width=2, bg="black")
+separator.pack(side="left", fill="y")
+
+# Right side for upload and analysis
+right_frame = Frame(main_frame, bg="white", width=600, height=700)
+right_frame.pack(side="left", fill="both", padx=10, pady=10)
+right_frame.pack_propagate(False)
+
+Label(right_frame, text="Upload and Analyze Image", font=("Helvetica", 16), bg="white").pack(pady=10)
+Button(right_frame, text="Upload Image", command=upload_and_predict, font=("Helvetica", 14)).pack(pady=5)
+
+image_chart_frame = Frame(right_frame, bg="white")
+image_chart_frame.pack(pady=10)
+
+preprocessed_image_label = Label(image_chart_frame, bg="white")
+preprocessed_image_label.grid(row=0, column=0, padx=10)
+
+# Create a Matplotlib figure for the probability bar chart
+fig, ax = plt.subplots(figsize=(2, 2))
+canvas = FigureCanvasTkAgg(fig, master=image_chart_frame)
+canvas_widget = canvas.get_tk_widget()
+canvas_widget.grid(row=0, column=1, padx=10)
+
+# Initialize the bar chart with zeros
+update_bar_chart(ax, canvas, np.zeros(10))
+
+result_label = Label(right_frame, text="Predicted Digit: ", font=("Helvetica", 16), bg="white")
 result_label.pack(pady=10)
 
-Label(frame, text="Press the button below to start live digit detection", font=("Helvetica", 16)).pack(pady=10)
+# Add Quit button
+Button(right_frame, text="Quit Program", command=root.quit, font=("Helvetica", 14)).pack(pady=10)
 
-Button(frame, text="Start Live Feed", command=start_camera_feed, font=("Helvetica", 14)).pack(pady=10)
-
-Button(frame, text="Quit", command=root.quit, font=("Helvetica", 14)).pack(pady=10)
-
+# Start the main GUI loop
 root.mainloop()
