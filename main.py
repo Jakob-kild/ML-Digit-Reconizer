@@ -21,8 +21,8 @@ def preprocess_image(image_path):
         transforms.Normalize((0.5,), (0.5,))
     ])
     image = Image.open(image_path)
-    tensor_image = transform(image).unsqueeze(0)  # Add batch dimension
-    processed_image = transform(image)  # Return the processed image for display
+    tensor_image = transform(image).unsqueeze(0)
+    processed_image = transform(image)
     return tensor_image, processed_image
 
 def preprocess_frame(frame):
